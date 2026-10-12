@@ -1,45 +1,73 @@
 import socket
 import argparse
 from datetime import datetime
+import threading
+from queue import Queue
 
-def scan_ports(target, ports):
-    print(f"\n[*] Scanning {target}...")
+open_ports = []
+print_lock = threading.Lock()
+
+def scan_port(target, port):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((target, port))
+        
+        if result == 0:
+            try:
+                service = socket.getservbyport(port)
+            except:
+                service = "unknown"
+            with print_lock:
+                print(f"[+] Port {port}: OPEN - {service}")
+            open_ports.append(port)
+        sock.close()
+    except:
+        pass
+
+def scan_ports(target, ports, threads=50):
+    print(f"\n[*] Scanning {target} with {threads} threads...")
     print(f"[*] Started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
-    open_ports = []
-    
+    q = Queue()
     for port in ports:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            result = sock.connect_ex((target, port))
-            
-            if result == 0:
-                try:
-                    service = socket.getservbyport(port)
-                except:
-                    service = "unknown"
-                print(f"[+] Port {port}: OPEN - {service}")
-                open_ports.append(port)
-            else:
-                print(f"[-] Port {port}: closed")
-            
-            sock.close()
-        except Exception as e:
-            print(f"[!] Error scanning port {port}: {e}")
+        q.put(port)
     
-    print(f"\n[*] Scan complete. Found {len(open_ports)} open ports.")
+    def worker():
+        while not q.empty():
+            port = q.get()
+            scan_port(target, port)
+            q.task_done()
+    
+    thread_list = []
+    for _ in range(threads):
+        t = threading.Thread(target=worker)
+        t.daemon = True
+        t.start()
+        thread_list.append(t)
+    
+    q.join()
+    
+    print(f"\n[*] Scan complete. Found {len(open_ports)} open ports: {sorted(open_ports)}")
     return open_ports
 
 def main():
     parser = argparse.ArgumentParser(description="RangerScan - Lightweight Python Security Scanner")
-    parser.add_argument("target", help="Target IP or domain (e.g., 127.0.0.1)")
-    parser.add_argument("-p", "--ports", default="21,22,80,443,3306,8080", help="Comma separated ports")
+    parser.add_argument("target", help="Target IP or domain")
+    parser.add_argument("-p", "--ports", default="1-100", help="Ports: 21,22,80 or range 1-1000")
+    parser.add_argument("-t", "--threads", type=int, default=50, help="Number of threads")
     
     args = parser.parse_args()
     
-    ports = [int(p.strip()) for p in args.ports.split(",")]
-    scan_ports(args.target, ports)
+    # Parse ports - support both 21,22 and 1-1000
+    ports = []
+    if "-" in args.ports:
+        start, end = map(int, args.ports.split("-"))
+        ports = range(start, end+1)
+    else:
+        ports = [int(p.strip()) for p in args.ports.split(",")]
+    
+    scan_ports(args.target, ports, args.threads)
 
 if __name__ == "__main__":
     main()
