@@ -1,11 +1,35 @@
-# RangerScan - Mini Vulnerability Scanner
+# RangerScan - Lightweight Python Port Scanner
 
-> Lightweight scanner that checks for the 3 most common misconfigurations in small web apps
+Fast, multithreaded TCP port scanner built from scratch in Python. A security tool for learning and authorized testing.
 
-### Why this exists
-Most small apps get breached the same way: open DB port, missing security headers, or basic SQLi. Existing tools are heavy. This is fast and readable.
+## Features
+- TCP Connect Scan
+- Service detection
+- Multithreaded (50x faster)
+- Supports port ranges (1-1000) and lists (22,80,443)
+- Clean CLI
 
-### How to run
-```bash
-pip install -r requirements.txt
-python scanner.py --target https://example.com
+## Usage
+
+# Scan top 100 ports
+python scanner.py scanme.nmap.org -p 1-100
+
+# Fast scan with 100 threads
+python scanner.py 127.0.0.1 -p 1-1000 -t 100
+
+# Scan specific ports
+python scanner.py example.com -p 22,80,443
+
+## Demo
+[*] Scanning scanme.nmap.org with 50 threads...
+[+] Port 22: OPEN - ssh
+[+] Port 80: OPEN - http
+
+## Legal Disclaimer
+For educational purposes and authorized testing only. Do not scan targets you don't own without permission.
+
+## Tech Stack
+Python 3, sockets, threading, argparse
+
+## Author
+Built during cybersecurity learning journey
