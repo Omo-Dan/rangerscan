@@ -12,14 +12,26 @@ def scan_port(target, port):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1)
         result = sock.connect_ex((target, port))
-        
+
         if result == 0:
             try:
                 service = socket.getservbyport(port)
             except:
                 service = "unknown"
+
+            # Banner grabbing attempt
+            banner = ""
+            try:
+                sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
+                banner = sock.recv(1024).decode(errors="ignore").strip().split('\n')[0]
+            except:
+                try:
+                    banner = sock.recv(1024).decode(errors="ignore").strip().split('\n')[0]
+                except:
+                    banner = "No banner"
+
             with print_lock:
-                print(f"[+] Port {port}: OPEN - {service}")
+                print(f"[+] Port {port}: OPEN - {service} | {banner[:60]}")
             open_ports.append(port)
         sock.close()
     except:
