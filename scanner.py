@@ -68,8 +68,10 @@ def main():
     parser.add_argument("target", help="Target IP or domain")
     parser.add_argument("-p", "--ports", default="1-100", help="Ports: 21,22,80 or range 1-1000")
     parser.add_argument("-t", "--threads", type=int, default=50, help="Number of threads")
+    parser.add_argument('-o', '--output', help='Save to file')
     
     args = parser.parse_args()
+   
     
     # Parse ports - support both 21,22 and 1-1000
     ports = []
@@ -80,6 +82,12 @@ def main():
         ports = [int(p.strip()) for p in args.ports.split(",")]
     
     scan_ports(args.target, ports, args.threads)
+
+    if args.output:
+       with open(args.output, 'w') as f:
+        for p in open_ports:
+            f.write(f"{p}\n")
+    print(f"[+] Saved to {args.output}")
 
 if __name__ == "__main__":
     main()
