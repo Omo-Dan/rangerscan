@@ -1,82 +1,96 @@
-import argparse
 import socket
-import requests
+import argparse
 import sqlite3
 import re
+import requests
 from datetime import datetime
 
-DB_FILE = "rangerscan.db"
+DB = "rangerscan.db"
 
-# --- From vuln.py ---
-CVE_DB = {
-    "OpenSSH_6.6.1": "CVE-2015-5600 HIGH",
-    "OpenSSH_7.2": "CVE-2016-10009 MEDIUM",
-}
+def init_db():
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS logs
+                 (ip TEXT PRIMARY KEY, attempts INTEGER, last_seen TEXT)''')
+    conn.commit()
+    conn.close()
 
 def scan_target(target, port):
     print(f"[*] Scanning {target}:{port}")
     try:
-        if port in [80, 443]:
-            url = f"{'https' if port==443 else 'http'}://{target}:{port}"
-            r = requests.get(url, timeout=5)
-            print(f"[WEB SERVER] {r.headers.get('Server','Unknown')}")
-            issues = []
-            if "X-Frame-Options" not in r.headers:
-                issues.append("Missing X-Frame-Options")
-            if "Content-Security-Policy" not in r.headers:
-                issues.append("Missing CSP")
-            if issues:
-                print(f"[VULN] { ' | '.join(issues) }")
-            else:
-                print("[SAFE] Headers OK")
-        else:
-            s = socket.socket()
-            s.settimeout(3)
-            s.connect((target, port))
-            banner = s.recv(1024).decode(errors='ignore')
-            print(f"[BANNER] {banner.strip()}")
-            found = False
-            for k,v in CVE_DB.items():
-                if k in banner:
-                    print(f"[CVE] {v}")
-                    found = True
-            if not found:
-                print("[SAFE] No known CVE")
-            s.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        result = sock.connect_ex((target, port))
+
+        if result!= 0:
+            print(f"[-] {target}:{port} closed")
+            sock.close()
+            return
+
+        # Banner grab
+        try:
+            sock.send(b'HEAD / HTTP/1.0\r\n\r\n')
+            banner = sock.recv(1024).decode(errors='ignore')
+            if banner:
+                print(f"[BANNER] {banner.splitlines()[0][:100]}")
+        except:
+            pass
+
+        sock.close()
+
+        # Web header audit for port 80,443,8080
+        if port in [80, 443, 8080, 8000]:
+            check_web_headers(target, port)
+
+    except socket.timeout:
+        print(f"[-] {target}:{port} filtered (timeout - firewall)")
+    except ConnectionRefusedError:
+        print(f"[-] {target}:{port} closed")
     except Exception as e:
         print(f"[ERROR] {e}")
 
-# --- From logwatcher.py ---
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
+def check_web_headers(target, port):
+    try:
+        proto = "https" if port == 443 else "http"
+        url = f"{proto}://{target}:{port}"
+        r = requests.get(url, timeout=3)
+        server = r.headers.get('Server', 'Unknown')
+        print(f"[WEB SERVER] {server}")
 
-    c.execute('''CREATE TABLE IF NOT EXISTS attacks
-             (id INTEGER PRIMARY KEY, ip TEXT UNIQUE, attempts INTEGER, last_seen TEXT)''')
+        vulns = []
+        if 'X-Frame-Options' not in r.headers:
+            vulns.append("Missing X-Frame-Options")
+        if 'Content-Security-Policy' not in r.headers:
+            vulns.append("Missing CSP")
 
-    conn.commit()
-    conn.close()
+        for v in vulns:
+            print(f"[VULN] {v}")
 
-def check_logs(log_file="auth.log"):
-    init_db()
-    pattern = r"Failed password.*from (\d+\.\d+\.\d+\.\d+)"
+    except Exception as e:
+        pass
+
+def parse_logs(logfile="auth.log"):
+    print("[*] Parsing logs...")
+    pattern = r"Failed password for.* from (\d+\.\d+\.\d+\.\d+)"
     ips = {}
     try:
-        with open(log_file) as f:
+        with open(logfile, 'r') as f:
             for line in f:
-                m = re.search(pattern, line)
-                if m:
-                    ip = m.group(1)
+                match = re.search(pattern, line)
+                if match:
+                    ip = match.group(1)
                     ips[ip] = ips.get(ip, 0) + 1
     except FileNotFoundError:
-        print(f"[!] {log_file} not found")
+        print(f"[-] {logfile} not found")
         return
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB)
     c = conn.cursor()
     for ip, count in ips.items():
-        c.execute("INSERT OR REPLACE INTO attacks (ip, attempts, last_seen) VALUES (?,?,?)",
-                  (ip, count, datetime.now().isoformat()))
+        now = datetime.now().isoformat()
+        # Fix duplicate IP bug with UNIQUE
+        c.execute("INSERT OR REPLACE INTO logs (ip, attempts, last_seen) VALUES (?,?,?)",
+                  (ip, count, now))
         if count >= 5:
             print(f"[ALERT] BRUTE FORCE {ip} - {count}x")
         else:
@@ -84,30 +98,32 @@ def check_logs(log_file="auth.log"):
     conn.commit()
     conn.close()
 
-def show_report():
-    init_db()
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
+def report():
     print("\n===== RANGER SCAN REPORT =====")
-    for row in c.execute("SELECT ip, attempts, last_seen FROM attacks ORDER BY attempts DESC"):
-        print(f"IP: {row[0]} | Attempts: {row[1]} | Last: {row[2]}")
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    try:
+        for row in c.execute("SELECT * FROM logs"):
+            print(f"IP: {row[0]} | Attempts: {row[1]} | Last: {row[2]}")
+    except:
+        print("No logs yet")
     conn.close()
-    print("==============================")
 
-# --- CLI ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RangerScan - Unified Security Tool")
-    parser.add_argument("--scan", nargs=2, metavar=('TARGET','PORT'), help="Scan target")
-    parser.add_argument("--logs", action="store_true", help="Check auth.log for attacks")
-    parser.add_argument("--report", action="store_true", help="Show DB report")
-
+    init_db()
+    parser = argparse.ArgumentParser(description="RangerScan v1.0 SOC Dashboard")
+    parser.add_argument('--scan', nargs=2, metavar=('TARGET', 'PORT'), help='Scan target')
+    parser.add_argument('--logs', action='store_true', help='Parse auth logs')
+    parser.add_argument('--report', action='store_true', help='Show report')
     args = parser.parse_args()
 
     if args.scan:
-        scan_target(args.scan[0], int(args.scan[1]))
-    elif args.logs:
-        check_logs()
-    elif args.report:
-        show_report()
-    else:
+        target = args.scan[0]
+        port = int(args.scan[1])
+        scan_target(target, port)
+    if args.logs:
+        parse_logs()
+    if args.report:
+        report()
+    if not any(vars(args).values()):
         parser.print_help()
